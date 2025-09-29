@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback } from 'react';
 import { UploadIcon } from './icons';
 
@@ -38,8 +37,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload }) =
   return (
     <div className="w-full flex flex-col items-center justify-center p-4">
         <div className="text-center mb-8">
-            <h2 className="text-3xl font-bold text-slate-100 sm:text-4xl">Turn Your Drawing into a Tutorial</h2>
-            <p className="mt-4 text-lg text-slate-400">
+            <h2 className="text-3xl font-bold text-stone-900 sm:text-4xl">Turn Your Drawing into a Tutorial</h2>
+            <p className="mt-4 text-lg text-stone-600">
                 Upload a simple drawing, and our AI will show you how to create it step-by-step.
             </p>
         </div>
@@ -60,14 +59,14 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload }) =
           id="label-file-upload"
           htmlFor="input-file-upload"
           className={`h-64 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer transition-colors duration-300
-            ${dragActive ? 'border-sky-400 bg-sky-900/50' : 'border-slate-600 bg-slate-800 hover:border-sky-500 hover:bg-slate-700'}`}
+            ${dragActive ? 'border-amber-600 bg-amber-100/50' : 'border-stone-400 bg-stone-50/50 hover:border-amber-600 hover:bg-stone-100/70'}`}
         >
           <div className="flex flex-col items-center justify-center">
             <UploadIcon />
-            <p className="font-semibold text-slate-200 mt-4">
-              <span className="text-sky-400">Click to upload</span> or drag and drop
+            <p className="font-semibold text-stone-700 mt-4">
+              <span className="text-amber-700">Click to upload</span> or drag and drop
             </p>
-            <p className="text-sm text-slate-500 mt-1">PNG, JPG, or WEBP</p>
+            <p className="text-sm text-stone-500 mt-1">PNG, JPG, or WEBP</p>
           </div>
         </label>
         {dragActive && (

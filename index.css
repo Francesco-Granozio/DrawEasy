@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Roboto:wght@400;500;700&display=swap');
+
+body {
+    font-family: 'Roboto', sans-serif;
+    /* "Old style, with angels" artistic background */
+    background-color: #FDFBF6;
+    background-image:
+        /* Soft vignette effect */
+        radial-gradient(ellipse at center, hsla(39, 50%, 95%, 0) 0%, hsla(39, 40%, 85%, 0.6) 100%),
+        /* Subtle diagonal line texture, like old paper */
+        repeating-linear-gradient(
+            -45deg,
+            transparent,
+            transparent 10px,
+            hsla(39, 20%, 80%, 0.1) 10px,
+            hsla(39, 20%, 80%, 0.1) 20px
+        );
+}
+
+h1, h2, h3 {
+    font-family: 'Playfair Display', serif;
+}

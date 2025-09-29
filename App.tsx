@@ -4,7 +4,7 @@ import { StepsGallery } from './components/StepsGallery';
 import { LoadingIndicator } from './components/LoadingIndicator';
 import { StepInteractor } from './components/StepInteractor';
 import { StepCard } from './components/StepCard';
-import { getDrawingSteps, generateStepImage } from './services/geminiService';
+import { getDrawingSteps, generateStepImage, getSubSteps } from './services/geminiService';
 import type { DrawingStep, AppState, StepDescription, ImageObject } from './types';
 import { AppStateEnum } from './types';
 import { LogoIcon } from './components/icons';
@@ -198,6 +198,57 @@ const App: React.FC = () => {
     processStep(currentStepIndex, currentCanvas, feedback);
   }, [currentStepIndex, processStep, currentCanvas]);
 
+  const handleBreakDownStep = useCallback(async () => {
+    if (!proposedStep || !currentCanvas || !originalImage) {
+        setError('An internal error occurred: missing data for step breakdown.');
+        setAppState(AppStateEnum.ERROR);
+        return;
+    }
+    
+    setAppState(AppStateEnum.LOADING);
+    setStatusMessage('Breaking the step into simpler parts...');
+
+    try {
+        const [, imageData] = proposedStep.imageUrl.split(';base64,');
+        const mimeType = proposedStep.imageUrl.substring(5, proposedStep.imageUrl.indexOf(';'));
+        const canvasAfterStep: ImageObject = { base64: imageData, mimeType };
+
+        const newSubStepDescriptions = await getSubSteps(
+            originalImage,
+            currentCanvas, // Canvas before the step
+            canvasAfterStep, // Canvas after the step (from proposedStep)
+            proposedStep.description
+        );
+
+        if (!newSubStepDescriptions || newSubStepDescriptions.length === 0) {
+            throw new Error("Could not break down the step. Please try accepting or retrying the original step.");
+        }
+
+        const updatedStepDescriptions = [...stepDescriptions];
+        // FIX: The `newSubStepDescriptions` are missing the `step` property, causing a type error.
+        // Map them to the full `StepDescription` type, adding a placeholder step number
+        // that will be recalculated in the next step.
+        const subStepsToInsert = newSubStepDescriptions.map(sub => ({ ...sub, step: 0 }));
+        updatedStepDescriptions.splice(currentStepIndex, 1, ...subStepsToInsert);
+
+        const finalStepDescriptions = updatedStepDescriptions.map((step, index) => ({
+            ...step,
+            step: index + 1,
+        }));
+        
+        setStepDescriptions(finalStepDescriptions);
+        setProposedStep(null);
+        
+        await processStep(currentStepIndex, currentCanvas, undefined, originalImage, finalStepDescriptions);
+
+    } catch (err) {
+        console.error(err);
+        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+        setError(`Failed to break down the step. ${errorMessage}`);
+        setAppState(AppStateEnum.AWAITING_USER_INPUT);
+    }
+  }, [proposedStep, currentCanvas, originalImage, stepDescriptions, currentStepIndex, processStep]);
+
   const handleReset = () => {
     setAppState(AppStateEnum.IDLE);
     setAcceptedSteps([]);
@@ -237,7 +288,7 @@ const App: React.FC = () => {
                 </div>
               </div>
             )}
-            {proposedStep && <StepInteractor step={proposedStep} onAccept={handleAcceptStep} onRetry={handleRetryStep} />}
+            {proposedStep && <StepInteractor step={proposedStep} onAccept={handleAcceptStep} onRetry={handleRetryStep} onBreakDown={handleBreakDownStep} />}
           </>
         );
       case AppStateEnum.RESULTS:
@@ -249,7 +300,7 @@ const App: React.FC = () => {
             <p className="text-red-400 mb-6">{error}</p>
             <button
               onClick={handleReset}
-              className="px-6 py-2 bg-sky-600 text-white font-semibold rounded-lg shadow-md hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-opacity-75 transition-colors"
+              className="px-6 py-2 bg-amber-600 text-white font-semibold rounded-lg shadow-md hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-opacity-75 transition-colors"
             >
               Try Again
             </button>
@@ -262,12 +313,12 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen text-stone-800 flex flex-col items-center p-4 sm:p-6 lg:p-8">
       <header className="w-full max-w-5xl mx-auto flex items-center justify-center sm:justify-start mb-8">
          <div className="flex items-center space-x-3">
            <LogoIcon />
-            <h1 className="text-2xl sm:text-3xl font-bold text-sky-400">
-              Draw Step by Step AI
+            <h1 className="text-2xl sm:text-3xl font-bold text-amber-800 tracking-wide">
+              DrawEasy
             </h1>
          </div>
       </header>
@@ -275,7 +326,6 @@ const App: React.FC = () => {
         {renderContent()}
       </main>
       <footer className="w-full max-w-5xl mx-auto text-center py-4 mt-8">
-        <p className="text-sm text-slate-500">Powered by Gemini AI</p>
       </footer>
     </div>
   );
