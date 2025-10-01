@@ -1,6 +1,5 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-// FIX: Import shared ImageObject type.
-import type { StepDescription, ImageObject } from '../types';
+import type { ImageObject, ExpertInstruction, ExpertValidation } from '../types';
 
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set");
@@ -8,97 +7,43 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const INSTRUCTION_FOR_STEPS = `
-You are an expert drawing instructor. Your primary goal is to break down a complex drawing into many small, simple, easy-to-follow steps.
-Analyze the provided drawing.
-Your task is to generate a step-by-step tutorial to recreate this drawing. The tutorial should consist of 8-12 very simple, sequential steps. Each step should represent a single, small addition to the drawing.
-For each step, provide a clear, one-sentence description of what to draw. The descriptions should be concise and action-oriented, describing only the new elements to add in that step. Do not combine multiple actions into one step.
 
-Example for a simple house drawing:
-- Step 1: "Draw a horizontal line for the ground."
-- Step 2: "Add a large square on top of the ground line for the main body of the house."
-- Step 3: "Draw a triangle on top of the square to form the roof."
-- Step 4: "Add a small square for the door inside the house."
-- Step 5: "Draw a small circle for the doorknob on the door."
 
-Respond with only the JSON object.
-`;
-
-export const getDrawingSteps = async (imageBase64: string, mimeType: string): Promise<StepDescription[]> => {
-    const imagePart = {
-      inlineData: {
-        data: imageBase64,
-        mimeType: mimeType,
-      },
-    };
-
-    const textPart = {
-        text: INSTRUCTION_FOR_STEPS
-    };
-
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: { parts: [imagePart, textPart] },
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                    steps: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                step: { type: Type.INTEGER },
-                                description: { type: Type.STRING },
-                            },
-                            required: ["step", "description"],
-                        }
-                    }
-                },
-                required: ["steps"],
-            },
-        }
-    });
-    
-    const jsonStr = response.text.trim();
-    const result = JSON.parse(jsonStr);
-
-    return result.steps as StepDescription[];
-};
-
-export const getSubSteps = async (
+/**
+ * STEP 1: L'esperto analizza l'immagine e decide il primo step
+ */
+export const generateFirstStepInstructions = async (
     originalImage: ImageObject,
-    canvasBeforeStep: ImageObject,
-    canvasAfterStep: ImageObject,
-    stepDescription: string
-): Promise<Omit<StepDescription, 'step'>[]> => {
-    const INSTRUCTION_FOR_SUB_STEPS = `You are an expert drawing instructor. The user wants to break down a single, complex drawing step into 2 or 3 simpler, sequential sub-steps. Your goal is to make the step easier for a beginner to draw.
+    totalSteps: number = 10
+): Promise<ExpertInstruction> => {
+    
+    const prompt = `You are an expert drawing instructor analyzing an image to create the FIRST STEP of a ${totalSteps}-step progressive drawing tutorial.
 
-**Your Task:**
-- You will be provided with a text instruction and three images in the following order:
-  1.  **Canvas Before:** The state of the drawing *before* the complex step was added.
-  2.  **Canvas After:** The state of the drawing *after* the complex step was added. This shows the result that needs to be broken down.
-  3.  **Reference Image:** The complete, final drawing for overall context.
-- The original instruction for the complex step was: "${stepDescription}".
-- Your task is to describe how to get from "Canvas Before" to "Canvas After" in 2 or 3 very simple steps.
-- Analyze the difference between "Canvas Before" and "Canvas After" to identify all the new lines that were added.
-- Create 2 or 3 new, very simple, one-sentence instructions that describe how to draw those new lines.
-- The sub-steps must be in a logical drawing order.
+CRITICAL: The first step must be EXTREMELY SIMPLE - only the most basic shapes and proportions.
 
-**Example:**
-If the original instruction was "Draw the car body", the sub-steps might be:
-- "Draw the curved roofline of the car."
-- "Draw the flat bottom line for the car's chassis."
-- "Connect the roofline and chassis with two short, curved lines for the front and back."
+Analyze the image and determine:
+1. What are the absolute simplest foundational elements?
+2. What should a student draw in a 10-second rough sketch?
+3. How to ensure it's rough and incomplete (only 10% detail)?
 
-Respond with only the JSON object containing the sub-steps. Do not add any other text.`;
+Provide clear, actionable instructions for an AI image generator.
 
-    const parts = [
-      { text: INSTRUCTION_FOR_SUB_STEPS },
-      { inlineData: { data: canvasBeforeStep.base64, mimeType: canvasBeforeStep.mimeType } },
-      { inlineData: { data: canvasAfterStep.base64, mimeType: canvasAfterStep.mimeType } },
-      { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } },
+Examples of good first steps:
+- For a face: "Draw a rough oval shape for the head outline"
+- For a house: "Sketch a loose rectangle for the building body"
+- For a car: "Draw a rough horizontal rectangular shape for the main body"
+
+Examples of BAD first steps (too detailed):
+- "Draw a circle with two dots for eyes" (too many elements)
+- "Sketch the house with windows outlined" (too advanced)
+
+Remember: Less is more. Start with ONE or TWO basic shapes only.
+
+Respond with only the JSON object.`;
+
+    const parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> = [
+        { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } },
+        { text: prompt }
     ];
 
     const response = await ai.models.generateContent({
@@ -109,74 +54,362 @@ Respond with only the JSON object containing the sub-steps. Do not add any other
             responseSchema: {
                 type: Type.OBJECT,
                 properties: {
-                    subSteps: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                description: { type: Type.STRING },
-                            },
-                            required: ["description"],
-                        }
-                    }
+                    stepNumber: { type: Type.INTEGER },
+                    totalSteps: { type: Type.INTEGER },
+                    targetCompleteness: { type: Type.INTEGER },
+                    whatToDraw: { type: Type.STRING },
+                    drawingInstructions: { type: Type.STRING },
+                    avoidance: { type: Type.STRING },
                 },
-                required: ["subSteps"],
+                required: ["stepNumber", "totalSteps", "targetCompleteness", "whatToDraw", "drawingInstructions", "avoidance"],
             },
         }
     });
 
     const jsonStr = response.text.trim();
-    const result = JSON.parse(jsonStr);
-
-    return result.subSteps as Omit<StepDescription, 'step'>[];
+    return JSON.parse(jsonStr) as ExpertInstruction;
 };
 
-export const generateStepImage = async (
+/**
+ * STEP 2: Il disegnatore genera l'immagine basandosi sulle istruzioni dell'esperto
+ */
+export const generateImageFromInstructions = async (
     originalImage: ImageObject,
-    canvasImage: ImageObject,
-    stepDescription: string,
-    userFeedback?: string,
+    previousCanvas: ImageObject | null,
+    instructions: ExpertInstruction
 ): Promise<ImageObject> => {
     
-    let instruction = `You are a precise and meticulous illustrator AI. Your task is to perfectly replicate a single step in a drawing tutorial. You must act as a perfect copying tool, not a creative artist.
+    const isFirstStep = instructions.stepNumber === 1;
+    
+    const prompt = `You are an AI illustrator following precise instructions from an expert drawing instructor.
 
-You will be provided with a text instruction and two images in the following order:
-1.  **Canvas Image:** This is the current state of the drawing. It might be blank or have lines from previous steps.
-2.  **Reference Image:** This is the complete, final drawing. It is your absolute guide for placement, style, and proportions. You must not deviate from it in any way.
+STEP: ${instructions.stepNumber} of ${instructions.totalSteps}
+TARGET COMPLETION: ${instructions.targetCompleteness}%
 
-The current instruction is: "${stepDescription}".
+INSTRUCTIONS FROM EXPERT:
+${instructions.drawingInstructions}
 
-**Your Critical Mission:**
-- Draw *only* the new elements described in the instruction.
-- **ABSOLUTE RULE:** You MUST NOT invent any details or elements that are not present in the **Reference Image**.
-- **PRECISION IS KEY:** The new elements you draw on the canvas **MUST** be in the exact same position and have the exact same proportions as they appear in the **Reference Image**.
-- Do not alter or redraw any existing lines on the canvas. Your output must include everything from the original canvas plus the new elements.
-- The final output must be a clean, black and white line art image on a plain white background.
-- Output ONLY the final image. Do not add any text, labels, or annotations.`;
+WHAT TO DRAW:
+${instructions.whatToDraw}
 
-    if (userFeedback && userFeedback.trim().length > 0) {
-        instruction += `\n\n**Important Correction:** A previous attempt was incorrect. Please adhere to the following user feedback: "${userFeedback}". Re-evaluate the instruction and the reference image to ensure the new output is correct.`;
+CRITICAL - AVOID:
+${instructions.avoidance}
+
+${isFirstStep ? `
+⚠️ FIRST STEP RULES:
+- This is the FOUNDATION - must be extremely rough and simple
+- Use loose, sketchy lines
+- NO details, NO precision, NO refinement
+- Think "10-second gesture sketch"
+- Less is more - draw ONLY what's specified
+` : `
+REFINEMENT RULES:
+- Take the previous drawing and make it ${instructions.targetCompleteness}% complete
+- Add details gradually - don't jump ahead
+- Maintain correct proportions from the reference image
+- Refine the entire drawing, not just one area
+`}
+
+OUTPUT: Black and white line art on white background. No text or labels.`;
+
+    const parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> = [];
+    
+    if (previousCanvas) {
+        parts.push({ inlineData: { data: previousCanvas.base64, mimeType: previousCanvas.mimeType } });
     }
-
-    const parts = [
-      { text: instruction },
-      { inlineData: { data: canvasImage.base64, mimeType: canvasImage.mimeType } },
-      { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } },
-    ];
+    
+    parts.push({ inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } });
+    parts.push({ text: prompt });
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image-preview',
-      contents: { parts },
-      config: {
-          responseModalities: [Modality.IMAGE, Modality.TEXT],
-      },
+        model: 'gemini-2.5-flash-image-preview',
+        contents: { parts },
+        config: {
+            responseModalities: [Modality.IMAGE, Modality.TEXT],
+        },
     });
 
     for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        return { base64: part.inlineData.data, mimeType: part.inlineData.mimeType };
-      }
+        if (part.inlineData) {
+            return { base64: part.inlineData.data, mimeType: part.inlineData.mimeType };
+        }
     }
 
     throw new Error('Image generation failed to return an image.');
+};
+
+/**
+ * STEP 3: L'esperto valida l'immagine generata
+ */
+export const expertValidateImage = async (
+    originalImage: ImageObject,
+    generatedImage: ImageObject,
+    previousCanvas: ImageObject | null,
+    currentInstructions: ExpertInstruction
+): Promise<ExpertValidation> => {
+    
+    const prompt = `You are an expert drawing instructor evaluating a student's work.
+
+CONTEXT:
+- This is step ${currentInstructions.stepNumber} of ${currentInstructions.totalSteps}
+- Target completion: ${currentInstructions.targetCompleteness}%
+- Instructions given: "${currentInstructions.whatToDraw}"
+
+YOU WILL SEE:
+1. The generated image (student's work)
+2. The original reference image (final goal)
+${previousCanvas ? '3. The previous step (what it looked like before)' : ''}
+
+EVALUATION CRITERIA:
+
+1. **Did it follow instructions?**
+   - Does it contain what was asked?
+   - Did it avoid what it should avoid?
+
+2. **Is the detail level correct?**
+   - At ${currentInstructions.targetCompleteness}%, is it too detailed or not detailed enough?
+   ${currentInstructions.stepNumber === 1 ? '- CRITICAL: First step should be VERY rough. If clean/detailed, it FAILED.' : ''}
+
+3. **Does it match the reference?**
+   - Are proportions correct?
+   - Is positioning accurate?
+
+4. **Did it progress properly?**
+   ${previousCanvas ? '- Does it show improvement from previous step?' : '- Is it a good starting point?'}
+
+DECISION MAKING:
+- Score 70-100: APPROVE and proceed to next step
+- Score 0-69: REJECT and regenerate with feedback
+
+If REGENERATING, provide specific feedback on what went wrong.
+If PROCEEDING, provide instructions for the NEXT step (step ${currentInstructions.stepNumber + 1}).
+
+For next step instructions, remember:
+- Step ${currentInstructions.stepNumber + 1} target: ${Math.round(((currentInstructions.stepNumber + 1) / currentInstructions.totalSteps) * 100)}% completion
+- Add only a little more detail than current step
+- Be specific about what new elements to add
+- Clearly state what NOT to do yet
+
+Respond with only the JSON object.`;
+
+    const parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> = [
+        { inlineData: { data: generatedImage.base64, mimeType: generatedImage.mimeType } },
+        { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } },
+    ];
+
+    if (previousCanvas) {
+        parts.push({ inlineData: { data: previousCanvas.base64, mimeType: previousCanvas.mimeType } });
+    }
+
+    parts.push({ text: prompt });
+
+    const nextStepNum = currentInstructions.stepNumber + 1;
+    const isLastStep = nextStepNum > currentInstructions.totalSteps;
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: { parts },
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    approved: { type: Type.BOOLEAN },
+                    score: { type: Type.INTEGER },
+                    issues: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING }
+                    },
+                    nextAction: {
+                        type: Type.STRING,
+                        enum: ["regenerate", "proceed"]
+                    },
+                    feedbackForRegeneration: { type: Type.STRING },
+                    instructionsForNextStep: isLastStep ? { type: Type.NULL } : {
+                        type: Type.OBJECT,
+                        properties: {
+                            stepNumber: { type: Type.INTEGER },
+                            totalSteps: { type: Type.INTEGER },
+                            targetCompleteness: { type: Type.INTEGER },
+                            whatToDraw: { type: Type.STRING },
+                            drawingInstructions: { type: Type.STRING },
+                            avoidance: { type: Type.STRING },
+                        },
+                        required: ["stepNumber", "totalSteps", "targetCompleteness", "whatToDraw", "drawingInstructions", "avoidance"],
+                    },
+                },
+                required: ["approved", "score", "issues", "nextAction"],
+            },
+        }
+    });
+
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr) as ExpertValidation;
+};
+
+/**
+ * FUNZIONE PRINCIPALE: Gestisce l'intero ciclo per uno step
+ */
+export const generateValidatedStep = async (
+    originalImage: ImageObject,
+    previousCanvas: ImageObject | null,
+    currentInstructions: ExpertInstruction,
+    maxRetries: number = 3,
+    userFeedback?: string
+): Promise<{
+    image: ImageObject;
+    attempts: number;
+    finalScore: number;
+    validation: ExpertValidation;
+}> => {
+    
+    // Se c'è feedback dall'utente, modificiamo le istruzioni
+    let instructions = currentInstructions;
+    if (userFeedback && userFeedback.trim().length > 0) {
+        instructions = {
+            ...currentInstructions,
+            drawingInstructions: `${currentInstructions.drawingInstructions}\n\nUSER FEEDBACK: ${userFeedback}`,
+        };
+    }
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        console.log(`Step ${instructions.stepNumber}, attempt ${attempt}/${maxRetries}`);
+        
+        // Genera l'immagine
+        const generatedImage = await generateImageFromInstructions(
+            originalImage,
+            previousCanvas,
+            instructions
+        );
+        
+        // L'esperto valida
+        const validation = await expertValidateImage(
+            originalImage,
+            generatedImage,
+            previousCanvas,
+            instructions
+        );
+        
+        console.log(`Expert validation - Score: ${validation.score}, Approved: ${validation.approved}`);
+        console.log(`Issues:`, validation.issues);
+        
+        // Se approvato, ritorna
+        if (validation.approved) {
+            console.log(`✅ Step ${instructions.stepNumber} approved on attempt ${attempt}`);
+            return {
+                image: generatedImage,
+                attempts: attempt,
+                finalScore: validation.score,
+                validation
+            };
+        }
+        
+        // Se non approvato e non è l'ultimo tentativo, riprova con feedback
+        if (attempt < maxRetries) {
+            console.log(`❌ Step ${instructions.stepNumber} rejected, retrying with expert feedback...`);
+            
+            // Aggiorna le istruzioni con il feedback dell'esperto
+            instructions = {
+                ...instructions,
+                drawingInstructions: `${instructions.drawingInstructions}\n\nEXPERT CORRECTION: ${validation.feedbackForRegeneration}`,
+            };
+        }
+    }
+    
+    // Fallback: dopo tutti i tentativi, genera un'ultima volta e ritorna comunque
+    console.warn(`⚠️ Step ${instructions.stepNumber} not approved after ${maxRetries} attempts, using last attempt`);
+    
+    const finalImage = await generateImageFromInstructions(
+        originalImage,
+        previousCanvas,
+        instructions
+    );
+    
+    const finalValidation = await expertValidateImage(
+        originalImage,
+        finalImage,
+        previousCanvas,
+        instructions
+    );
+    
+    return {
+        image: finalImage,
+        attempts: maxRetries,
+        finalScore: finalValidation.score,
+        validation: finalValidation
+    };
+};
+
+/**
+ * FUNZIONE DI ALTO LIVELLO: Genera tutti gli step in sequenza
+ */
+export const generateCompleteDrawingTutorial = async (
+    originalImage: ImageObject,
+    totalSteps: number = 10,
+    onStepComplete?: (stepNumber: number, image: ImageObject, score: number) => void
+): Promise<{
+    steps: Array<{
+        stepNumber: number;
+        image: ImageObject;
+        instructions: ExpertInstruction;
+        score: number;
+        attempts: number;
+    }>;
+}> => {
+    const completedSteps: Array<{
+        stepNumber: number;
+        image: ImageObject;
+        instructions: ExpertInstruction;
+        score: number;
+        attempts: number;
+    }> = [];
+    
+    // Genera istruzioni per il primo step
+    let currentInstructions = await generateFirstStepInstructions(originalImage, totalSteps);
+    let previousCanvas: ImageObject | null = null;
+    
+    for (let i = 0; i < totalSteps; i++) {
+        console.log(`\n=== Generating Step ${i + 1}/${totalSteps} ===`);
+        
+        // Genera e valida lo step corrente
+        const result = await generateValidatedStep(
+            originalImage,
+            previousCanvas,
+            currentInstructions
+        );
+        
+        completedSteps.push({
+            stepNumber: currentInstructions.stepNumber,
+            image: result.image,
+            instructions: currentInstructions,
+            score: result.finalScore,
+            attempts: result.attempts
+        });
+        
+        // Callback opzionale
+        if (onStepComplete) {
+            onStepComplete(currentInstructions.stepNumber, result.image, result.finalScore);
+        }
+        
+        // Aggiorna canvas per il prossimo step
+        previousCanvas = result.image;
+        
+        // Ottieni istruzioni per il prossimo step (se esiste)
+        if (result.validation.instructionsForNextStep) {
+            currentInstructions = result.validation.instructionsForNextStep;
+        } else if (i < totalSteps - 1) {
+            // Fallback: genera nuove istruzioni se mancano
+            console.warn('Missing next step instructions, generating new ones...');
+            currentInstructions = {
+                stepNumber: i + 2,
+                totalSteps: totalSteps,
+                targetCompleteness: Math.round(((i + 2) / totalSteps) * 100),
+                whatToDraw: "Continue refining the drawing with more detail",
+                drawingInstructions: "Add more details and refine the previous step",
+                avoidance: "Don't skip ahead or add too many details at once"
+            };
+        }
+    }
+    
+    return { steps: completedSteps };
 };

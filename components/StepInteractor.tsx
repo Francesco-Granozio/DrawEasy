@@ -6,10 +6,9 @@ interface StepInteractorProps {
   step: DrawingStep;
   onAccept: () => void;
   onRetry: (feedback: string) => void;
-  onBreakDown: () => void;
 }
 
-export const StepInteractor: React.FC<StepInteractorProps> = ({ step, onAccept, onRetry, onBreakDown }) => {
+export const StepInteractor: React.FC<StepInteractorProps> = ({ step, onAccept, onRetry }) => {
   const [showRetryInput, setShowRetryInput] = useState(false);
   const [feedback, setFeedback] = useState('');
 
@@ -63,12 +62,6 @@ export const StepInteractor: React.FC<StepInteractorProps> = ({ step, onAccept, 
             className="px-6 py-3 bg-stone-500 text-white font-semibold rounded-lg shadow-md hover:bg-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:ring-opacity-75 transition transform hover:scale-105"
           >
             Discard & Retry
-          </button>
-           <button
-            onClick={onBreakDown}
-            className="px-6 py-3 bg-violet-600 text-white font-semibold rounded-lg shadow-md hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-opacity-75 transition transform hover:scale-105"
-          >
-            Break Down Step
           </button>
           <button
             onClick={onAccept}

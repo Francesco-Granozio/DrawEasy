@@ -4,10 +4,11 @@ import { StepsGallery } from './components/StepsGallery';
 import { LoadingIndicator } from './components/LoadingIndicator';
 import { StepInteractor } from './components/StepInteractor';
 import { StepCard } from './components/StepCard';
-import { getDrawingSteps, generateStepImage, getSubSteps } from './services/geminiService';
-import type { DrawingStep, AppState, StepDescription, ImageObject } from './types';
+import { generateFirstStepInstructions, generateValidatedStep } from './services/geminiService';
+import type { DrawingStep, AppState, ImageObject, ExpertInstruction } from './types';
 import { AppStateEnum } from './types';
 import { LogoIcon } from './components/icons';
+
 
 const resizeImage = (file: File, maxWidth: number, maxHeight: number): Promise<{ base64: string; mimeType: 'image/png'; width: number; height: number }> => {
   return new Promise((resolve, reject) => {
@@ -56,126 +57,121 @@ const resizeImage = (file: File, maxWidth: number, maxHeight: number): Promise<{
   });
 };
 
-const createBlankCanvasB64 = (width: number, height: number): string => {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-        throw new Error('Could not get canvas context for blank image');
-    }
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, width, height);
-    const dataUrl = canvas.toDataURL('image/png');
-    return dataUrl.split(',')[1];
-};
-
-
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppStateEnum.IDLE);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
 
   // State for interactive flow
-  const [stepDescriptions, setStepDescriptions] = useState<StepDescription[]>([]);
+  const [totalSteps] = useState<number>(10);
   const [acceptedSteps, setAcceptedSteps] = useState<DrawingStep[]>([]);
   const [proposedStep, setProposedStep] = useState<DrawingStep | null>(null);
-  const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
+  const [currentStepNumber, setCurrentStepNumber] = useState<number>(1);
   const [originalImage, setOriginalImage] = useState<ImageObject | null>(null);
   const [currentCanvas, setCurrentCanvas] = useState<ImageObject | null>(null);
+  const [currentInstructions, setCurrentInstructions] = useState<ExpertInstruction | null>(null);
+
+  // Validation info
+  const [validationAttempts, setValidationAttempts] = useState<number>(0);
+  const [validationScore, setValidationScore] = useState<number | null>(null);
 
   const processStep = useCallback(async (
-    index: number,
-    canvas: ImageObject,
-    feedback?: string,
-    // Optional overrides to solve race condition on initial generation
-    oImage?: ImageObject,
-    sDescriptions?: StepDescription[]
+    instructions: ExpertInstruction,
+    canvas: ImageObject | null,
+    oImage: ImageObject,
+    feedback?: string
   ) => {
-    const currentOriginalImage = oImage || originalImage;
-    const currentStepDescriptions = sDescriptions || stepDescriptions;
-
-    if (!currentOriginalImage || !currentStepDescriptions[index]) {
-      setError('An internal error occurred: missing data for step generation.');
-      setAppState(AppStateEnum.ERROR);
-      return;
-    }
-
     setAppState(AppStateEnum.LOADING);
-    setStatusMessage(`Generating image for step ${index + 1} of ${currentStepDescriptions.length}...`);
+    setStatusMessage(`Expert is analyzing and generating step ${instructions.stepNumber} of ${totalSteps}...`);
     setProposedStep(null);
+    setValidationAttempts(0);
+    setValidationScore(null);
 
     try {
-      const description = currentStepDescriptions[index].description;
-      const newCanvasData = await generateStepImage(
-        currentOriginalImage,
+      // L'esperto genera e valida lo step
+      const result = await generateValidatedStep(
+        oImage,
         canvas,
-        description,
+        instructions,
+        3,
         feedback
       );
 
+      setValidationAttempts(result.attempts);
+      setValidationScore(result.finalScore);
+
+      console.log(`Step ${instructions.stepNumber} completed:`, {
+        attempts: result.attempts,
+        score: result.finalScore,
+        approved: result.validation.approved
+      });
+
       const newProposedStep: DrawingStep = {
-        step: index + 1,
-        description: description,
-        imageUrl: `data:${newCanvasData.mimeType};base64,${newCanvasData.base64}`,
+        step: instructions.stepNumber,
+        description: instructions.whatToDraw,
+        imageUrl: `data:${result.image.mimeType};base64,${result.image.base64}`,
       };
       
       setProposedStep(newProposedStep);
+      
+      // Salva le istruzioni per il prossimo step se disponibili
+      if (result.validation.instructionsForNextStep) {
+        setCurrentInstructions(result.validation.instructionsForNextStep);
+      }
+      
       setAppState(AppStateEnum.AWAITING_USER_INPUT);
 
     } catch (err) {
       console.error(err);
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(`Failed to generate image for step ${index + 1}. ${errorMessage}`);
+      setError(`Failed to generate step ${instructions.stepNumber}. ${errorMessage}`);
       setAppState(AppStateEnum.ERROR);
     }
-  }, [originalImage, stepDescriptions]);
+  }, [totalSteps]);
 
   const handleImageUpload = useCallback(async (file: File) => {
     setAppState(AppStateEnum.LOADING);
     setError(null);
     setAcceptedSteps([]);
     setProposedStep(null);
-    setCurrentStepIndex(0);
+    setCurrentStepNumber(1);
+    setCurrentCanvas(null);
+    setValidationAttempts(0);
+    setValidationScore(null);
     setStatusMessage('Preparing your image...');
 
     try {
-      const { base64: imageBase64, mimeType, width, height } = await resizeImage(file, 1024, 1024);
-      const blankCanvasB64 = createBlankCanvasB64(width, height);
-      
+      const { base64: imageBase64, mimeType } = await resizeImage(file, 1024, 1024);
       const originalImgObj = { base64: imageBase64, mimeType };
-      const blankCanvasObj = { base64: blankCanvasB64, mimeType: 'image/png' as const };
-
       setOriginalImage(originalImgObj);
-      setCurrentCanvas(blankCanvasObj); // Set for the first potential retry
 
-      setStatusMessage('Breaking down drawing into steps...');
-      const steps: StepDescription[] = await getDrawingSteps(imageBase64, mimeType);
-
-      if (!steps || steps.length === 0) {
-        throw new Error('Could not generate drawing steps. Please try another image.');
-      }
-      setStepDescriptions(steps);
+      setStatusMessage('Expert is analyzing the image and planning the first step...');
       
-      // Kick off the first step generation, passing data directly to avoid race condition with state update
-      await processStep(0, blankCanvasObj, undefined, originalImgObj, steps);
+      // L'esperto genera le istruzioni per il primo step
+      const firstStepInstructions = await generateFirstStepInstructions(originalImgObj, totalSteps);
+      
+      console.log('First step instructions:', firstStepInstructions);
+      setCurrentInstructions(firstStepInstructions);
+      
+      // Genera il primo step
+      await processStep(firstStepInstructions, null, originalImgObj);
 
     } catch (err) {
       console.error(err);
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(`Failed to generate tutorial. ${errorMessage}`);
+      setError(`Failed to start tutorial. ${errorMessage}`);
       setAppState(AppStateEnum.ERROR);
     }
-  }, [processStep]);
+  }, [processStep, totalSteps]);
 
   const handleAcceptStep = useCallback(async () => {
-    if (!proposedStep) return;
+    if (!proposedStep || !originalImage) return;
 
-    // Add accepted step
+    // Aggiungi lo step accettato
     const newAcceptedSteps = [...acceptedSteps, proposedStep];
     setAcceptedSteps(newAcceptedSteps);
 
-    // Update canvas from proposed step's image data for the next step
+    // Aggiorna il canvas
     const [, imageData] = proposedStep.imageUrl.split(';base64,');
     const mimeType = proposedStep.imageUrl.substring(5, proposedStep.imageUrl.indexOf(';'));
     const newCanvas = { base64: imageData, mimeType };
@@ -183,82 +179,34 @@ const App: React.FC = () => {
     
     setProposedStep(null);
     
-    const nextStepIndex = currentStepIndex + 1;
+    const nextStepNumber = currentStepNumber + 1;
+    setCurrentStepNumber(nextStepNumber);
 
-    if (nextStepIndex < stepDescriptions.length) {
-      setCurrentStepIndex(nextStepIndex);
-      await processStep(nextStepIndex, newCanvas);
+    // Se ci sono ancora step da fare
+    if (nextStepNumber <= totalSteps && currentInstructions) {
+      await processStep(currentInstructions, newCanvas, originalImage);
     } else {
       setAppState(AppStateEnum.RESULTS);
     }
-  }, [proposedStep, acceptedSteps, currentStepIndex, stepDescriptions, processStep]);
+  }, [proposedStep, acceptedSteps, currentStepNumber, totalSteps, currentInstructions, originalImage, processStep]);
 
   const handleRetryStep = useCallback((feedback: string) => {
-    if (!currentCanvas) return; // Guard against unlikely race condition
-    processStep(currentStepIndex, currentCanvas, feedback);
-  }, [currentStepIndex, processStep, currentCanvas]);
-
-  const handleBreakDownStep = useCallback(async () => {
-    if (!proposedStep || !currentCanvas || !originalImage) {
-        setError('An internal error occurred: missing data for step breakdown.');
-        setAppState(AppStateEnum.ERROR);
-        return;
-    }
-    
-    setAppState(AppStateEnum.LOADING);
-    setStatusMessage('Breaking the step into simpler parts...');
-
-    try {
-        const [, imageData] = proposedStep.imageUrl.split(';base64,');
-        const mimeType = proposedStep.imageUrl.substring(5, proposedStep.imageUrl.indexOf(';'));
-        const canvasAfterStep: ImageObject = { base64: imageData, mimeType };
-
-        const newSubStepDescriptions = await getSubSteps(
-            originalImage,
-            currentCanvas, // Canvas before the step
-            canvasAfterStep, // Canvas after the step (from proposedStep)
-            proposedStep.description
-        );
-
-        if (!newSubStepDescriptions || newSubStepDescriptions.length === 0) {
-            throw new Error("Could not break down the step. Please try accepting or retrying the original step.");
-        }
-
-        const updatedStepDescriptions = [...stepDescriptions];
-        // FIX: The `newSubStepDescriptions` are missing the `step` property, causing a type error.
-        // Map them to the full `StepDescription` type, adding a placeholder step number
-        // that will be recalculated in the next step.
-        const subStepsToInsert = newSubStepDescriptions.map(sub => ({ ...sub, step: 0 }));
-        updatedStepDescriptions.splice(currentStepIndex, 1, ...subStepsToInsert);
-
-        const finalStepDescriptions = updatedStepDescriptions.map((step, index) => ({
-            ...step,
-            step: index + 1,
-        }));
-        
-        setStepDescriptions(finalStepDescriptions);
-        setProposedStep(null);
-        
-        await processStep(currentStepIndex, currentCanvas, undefined, originalImage, finalStepDescriptions);
-
-    } catch (err) {
-        console.error(err);
-        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        setError(`Failed to break down the step. ${errorMessage}`);
-        setAppState(AppStateEnum.AWAITING_USER_INPUT);
-    }
-  }, [proposedStep, currentCanvas, originalImage, stepDescriptions, currentStepIndex, processStep]);
+    if (!currentInstructions || !originalImage) return;
+    processStep(currentInstructions, currentCanvas, originalImage, feedback);
+  }, [currentInstructions, currentCanvas, originalImage, processStep]);
 
   const handleReset = () => {
     setAppState(AppStateEnum.IDLE);
     setAcceptedSteps([]);
     setProposedStep(null);
-    setStepDescriptions([]);
-    setCurrentStepIndex(0);
+    setCurrentStepNumber(1);
     setOriginalImage(null);
     setCurrentCanvas(null);
+    setCurrentInstructions(null);
     setError(null);
     setStatusMessage('');
+    setValidationAttempts(0);
+    setValidationScore(null);
   };
 
   const renderContent = () => {
@@ -288,7 +236,40 @@ const App: React.FC = () => {
                 </div>
               </div>
             )}
-            {proposedStep && <StepInteractor step={proposedStep} onAccept={handleAcceptStep} onRetry={handleRetryStep} onBreakDown={handleBreakDownStep} />}
+            {proposedStep && (
+              <>
+                <StepInteractor step={proposedStep} onAccept={handleAcceptStep} onRetry={handleRetryStep} />
+                
+                {/* Expert instructions display */}
+                {currentInstructions && (
+                  <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+                    <h3 className="font-semibold text-amber-900 mb-2">Expert Instructions:</h3>
+                    <p className="text-sm text-amber-800 mb-2">
+                      <strong>What to draw:</strong> {currentInstructions.whatToDraw}
+                    </p>
+                    <p className="text-xs text-amber-700">
+                      Target: {currentInstructions.targetCompleteness}% complete
+                    </p>
+                  </div>
+                )}
+                
+                {/* Validation info */}
+                {validationScore !== null && (
+                  <div className="mt-4 text-center">
+                    <div className="inline-flex items-center gap-2 px-4 py-2 bg-stone-100 rounded-lg text-sm">
+                      <span className="text-stone-600">
+                        Expert Score: <strong className={validationScore >= 70 ? 'text-green-600' : validationScore >= 50 ? 'text-amber-600' : 'text-red-600'}>{validationScore}/100</strong>
+                      </span>
+                      {validationAttempts > 1 && (
+                        <span className="text-stone-500">
+                          • {validationAttempts} attempt{validationAttempts > 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </>
         );
       case AppStateEnum.RESULTS:
@@ -312,9 +293,11 @@ const App: React.FC = () => {
     }
   };
 
+  const isInteractiveView = appState === AppStateEnum.LOADING || appState === AppStateEnum.AWAITING_USER_INPUT;
+
   return (
     <div className="min-h-screen text-stone-800 flex flex-col items-center p-4 sm:p-6 lg:p-8">
-      <header className="w-full max-w-5xl mx-auto flex items-center justify-center sm:justify-start mb-8">
+      <header className="w-full max-w-7xl mx-auto flex items-center justify-center sm:justify-start mb-8">
          <div className="flex items-center space-x-3">
            <LogoIcon />
             <h1 className="text-2xl sm:text-3xl font-bold text-amber-800 tracking-wide">
@@ -322,10 +305,39 @@ const App: React.FC = () => {
             </h1>
          </div>
       </header>
-      <main className="w-full max-w-5xl mx-auto flex-grow flex flex-col justify-center">
-        {renderContent()}
+      <main className="w-full max-w-7xl mx-auto flex-grow flex flex-col md:flex-row gap-8 items-start">
+        {isInteractiveView && originalImage && (
+            <aside className="w-full md:w-2/5 lg:w-1/3 p-4">
+                <div className="sticky top-8">
+                    <h2 className="text-xl font-bold text-amber-800 mb-4 text-center">Reference Image</h2>
+                    <div className="bg-white/50 backdrop-blur-sm border border-stone-300/50 rounded-xl shadow-lg overflow-hidden">
+                        <img 
+                            src={`data:${originalImage.mimeType};base64,${originalImage.base64}`} 
+                            alt="User's original drawing for reference"
+                            className="w-full h-auto object-contain rounded-xl"
+                        />
+                    </div>
+                    
+                    {/* Step progress indicator */}
+                    <div className="mt-4 p-3 bg-amber-50 rounded-lg">
+                      <p className="text-sm text-center text-amber-800">
+                        Step {currentStepNumber} of {totalSteps}
+                      </p>
+                      <div className="mt-2 w-full bg-amber-200 rounded-full h-2">
+                        <div 
+                          className="bg-amber-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${(currentStepNumber / totalSteps) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                </div>
+            </aside>
+        )}
+        <div className={isInteractiveView ? "w-full md:w-3/5 lg:w-2/3" : "w-full flex-grow flex flex-col justify-center"}>
+            {renderContent()}
+        </div>
       </main>
-      <footer className="w-full max-w-5xl mx-auto text-center py-4 mt-8">
+      <footer className="w-full max-w-7xl mx-auto text-center py-4 mt-8">
       </footer>
     </div>
   );
