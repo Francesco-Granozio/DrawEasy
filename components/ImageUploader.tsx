@@ -1,13 +1,17 @@
 import React, { useState, useCallback } from 'react';
 import { UploadIcon } from './icons';
 
+// Component for uploading the initial reference image
+// Supports both drag-and-drop and click-to-upload functionality
 interface ImageUploaderProps {
   onImageUpload: (file: File) => void;
 }
 
 export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload }) => {
+  // Track drag state for visual feedback
   const [dragActive, setDragActive] = useState(false);
 
+  // Handle drag events to show visual feedback when user drags files over the area
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -18,6 +22,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload }) =
     }
   }, []);
 
+  // Handle file drop - extract the file and pass it to the parent
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -27,6 +32,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload }) =
     }
   }, [onImageUpload]);
 
+  // Handle file selection via the hidden input element
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
     if (e.target.files && e.target.files[0]) {

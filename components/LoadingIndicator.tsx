@@ -1,9 +1,12 @@
 import React from 'react';
 
+// Loading indicator shown while AI is processing
+// Provides visual feedback and status messages during long operations
 interface LoadingIndicatorProps {
   message: string;
 }
 
+// Animated spinner component with dashed border for visual appeal
 const LoadingSpinner: React.FC = () => (
     <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-amber-600"></div>
 );

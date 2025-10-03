@@ -1,6 +1,9 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { ImageObject, ExpertInstruction, ExpertValidation } from '../types';
 
+// This service handles all AI interactions using Google's Gemini models
+// It implements a three-stage workflow: Expert Analysis -> Image Generation -> Quality Validation
+
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set");
 }
@@ -10,7 +13,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 
 /**
- * STEP 1: L'esperto analizza l'immagine e decide il primo step
+ * STEP 1: Expert analyzes the uploaded image and creates the first step plan
+ * This is crucial - it determines the entire tutorial structure and progression
  */
 export const generateFirstStepInstructions = async (
     originalImage: ImageObject,
@@ -41,11 +45,13 @@ Remember: Less is more. Start with ONE or TWO basic shapes only.
 
 Respond with only the JSON object.`;
 
+    // Prepare the input for the AI - image + text prompt
     const parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> = [
         { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } },
         { text: prompt }
     ];
 
+    // Use Gemini 2.5 Flash for fast analysis with structured JSON output
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: { parts },
@@ -71,7 +77,8 @@ Respond with only the JSON object.`;
 };
 
 /**
- * STEP 2: Il disegnatore genera l'immagine basandosi sulle istruzioni dell'esperto
+ * STEP 2: The AI illustrator creates the actual drawing based on expert instructions
+ * This is where the visual magic happens - turning text instructions into images
  */
 export const generateImageFromInstructions = async (
     originalImage: ImageObject,
@@ -112,15 +119,19 @@ REFINEMENT RULES:
 
 OUTPUT: Black and white line art on white background. No text or labels.`;
 
+    // Build the input array - previous canvas (if any), reference image, and instructions
     const parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> = [];
     
+    // Include previous step if this isn't the first step
     if (previousCanvas) {
         parts.push({ inlineData: { data: previousCanvas.base64, mimeType: previousCanvas.mimeType } });
     }
     
+    // Always include the original reference image
     parts.push({ inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } });
     parts.push({ text: prompt });
 
+    // Use the image generation model to create the drawing
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image-preview',
         contents: { parts },
@@ -129,6 +140,7 @@ OUTPUT: Black and white line art on white background. No text or labels.`;
         },
     });
 
+    // Extract the generated image from the response
     for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) {
             return { base64: part.inlineData.data, mimeType: part.inlineData.mimeType };
@@ -139,7 +151,8 @@ OUTPUT: Black and white line art on white background. No text or labels.`;
 };
 
 /**
- * STEP 3: L'esperto valida l'immagine generata
+ * STEP 3: Expert validates the generated image and provides quality feedback
+ * This is the quality control step - ensures each step meets educational standards
  */
 export const expertValidateImage = async (
     originalImage: ImageObject,
@@ -192,11 +205,13 @@ For next step instructions, remember:
 
 Respond with only the JSON object.`;
 
+    // Prepare input images for evaluation
     const parts: Array<{ inlineData: { data: string; mimeType: string } } | { text: string }> = [
         { inlineData: { data: generatedImage.base64, mimeType: generatedImage.mimeType } },
         { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } },
     ];
 
+    // Include previous step for progression comparison if available
     if (previousCanvas) {
         parts.push({ inlineData: { data: previousCanvas.base64, mimeType: previousCanvas.mimeType } });
     }
@@ -206,6 +221,7 @@ Respond with only the JSON object.`;
     const nextStepNum = currentInstructions.stepNumber + 1;
     const isLastStep = nextStepNum > currentInstructions.totalSteps;
 
+    // Get structured validation results from the expert
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: { parts },
@@ -248,7 +264,8 @@ Respond with only the JSON object.`;
 };
 
 /**
- * FUNZIONE PRINCIPALE: Gestisce l'intero ciclo per uno step
+ * MAIN FUNCTION: Orchestrates the complete workflow for a single step
+ * This is the heart of the system - it manages the generate -> validate -> retry loop
  */
 export const generateValidatedStep = async (
     originalImage: ImageObject,
@@ -263,7 +280,7 @@ export const generateValidatedStep = async (
     validation: ExpertValidation;
 }> => {
     
-    // Se c'è feedback dall'utente, modificiamo le istruzioni
+    // If user provided feedback, incorporate it into the instructions
     let instructions = currentInstructions;
     if (userFeedback && userFeedback.trim().length > 0) {
         instructions = {
@@ -272,17 +289,25 @@ export const generateValidatedStep = async (
         };
     }
 
+    // Keep track of all attempts for quality analysis
+    const allAttempts: Array<{
+        image: ImageObject;
+        validation: ExpertValidation;
+        score: number;
+    }> = [];
+
+    // Try up to maxRetries times to get an approved step
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         console.log(`Step ${instructions.stepNumber}, attempt ${attempt}/${maxRetries}`);
         
-        // Genera l'immagine
+        // Generate the image based on current instructions
         const generatedImage = await generateImageFromInstructions(
             originalImage,
             previousCanvas,
             instructions
         );
         
-        // L'esperto valida
+        // Have the expert validate the generated image
         const validation = await expertValidateImage(
             originalImage,
             generatedImage,
@@ -293,7 +318,14 @@ export const generateValidatedStep = async (
         console.log(`Expert validation - Score: ${validation.score}, Approved: ${validation.approved}`);
         console.log(`Issues:`, validation.issues);
         
-        // Se approvato, ritorna
+        // Save this attempt for later analysis if needed
+        allAttempts.push({
+            image: generatedImage,
+            validation,
+            score: validation.score
+        });
+        
+        // If approved, we're done with this step
         if (validation.approved) {
             console.log(`✅ Step ${instructions.stepNumber} approved on attempt ${attempt}`);
             return {
@@ -304,11 +336,11 @@ export const generateValidatedStep = async (
             };
         }
         
-        // Se non approvato e non è l'ultimo tentativo, riprova con feedback
+        // If not approved and we have retries left, improve instructions and try again
         if (attempt < maxRetries) {
             console.log(`❌ Step ${instructions.stepNumber} rejected, retrying with expert feedback...`);
             
-            // Aggiorna le istruzioni con il feedback dell'esperto
+            // Incorporate expert feedback into instructions for next attempt
             instructions = {
                 ...instructions,
                 drawingInstructions: `${instructions.drawingInstructions}\n\nEXPERT CORRECTION: ${validation.feedbackForRegeneration}`,
@@ -316,32 +348,40 @@ export const generateValidatedStep = async (
         }
     }
     
-    // Fallback: dopo tutti i tentativi, genera un'ultima volta e ritorna comunque
-    console.warn(`⚠️ Step ${instructions.stepNumber} not approved after ${maxRetries} attempts, using last attempt`);
+    // No attempt was approved - select the best one we have
+    console.warn(`⚠️ Step ${instructions.stepNumber} not approved after ${maxRetries} attempts, selecting best attempt`);
     
-    const finalImage = await generateImageFromInstructions(
-        originalImage,
-        previousCanvas,
-        instructions
+    // Find the attempt with the highest score
+    const bestAttempt = allAttempts.reduce((best, current) => 
+        current.score > best.score ? current : best
     );
     
-    const finalValidation = await expertValidateImage(
-        originalImage,
-        finalImage,
-        previousCanvas,
-        instructions
-    );
+    console.log(`📊 Best attempt: Score ${bestAttempt.score} (out of ${allAttempts.map(a => a.score).join(', ')})`);
+    
+    // Generate next step instructions if they're missing
+    let finalValidation = bestAttempt.validation;
+    if (!finalValidation.instructionsForNextStep && instructions.stepNumber < instructions.totalSteps) {
+        console.log('Generating next step instructions...');
+        // Re-run validation to get next step instructions
+        finalValidation = await expertValidateImage(
+            originalImage,
+            bestAttempt.image,
+            previousCanvas,
+            instructions
+        );
+    }
     
     return {
-        image: finalImage,
+        image: bestAttempt.image,
         attempts: maxRetries,
-        finalScore: finalValidation.score,
+        finalScore: bestAttempt.score,
         validation: finalValidation
     };
 };
 
 /**
- * FUNZIONE DI ALTO LIVELLO: Genera tutti gli step in sequenza
+ * HIGH-LEVEL FUNCTION: Generates a complete tutorial with all steps in sequence
+ * This is an alternative workflow that generates everything at once (not used in the interactive app)
  */
 export const generateCompleteDrawingTutorial = async (
     originalImage: ImageObject,
@@ -364,20 +404,22 @@ export const generateCompleteDrawingTutorial = async (
         attempts: number;
     }> = [];
     
-    // Genera istruzioni per il primo step
+    // Start by generating instructions for the first step
     let currentInstructions = await generateFirstStepInstructions(originalImage, totalSteps);
     let previousCanvas: ImageObject | null = null;
     
+    // Generate all steps in sequence
     for (let i = 0; i < totalSteps; i++) {
         console.log(`\n=== Generating Step ${i + 1}/${totalSteps} ===`);
         
-        // Genera e valida lo step corrente
+        // Generate and validate the current step
         const result = await generateValidatedStep(
             originalImage,
             previousCanvas,
             currentInstructions
         );
         
+        // Save the completed step
         completedSteps.push({
             stepNumber: currentInstructions.stepNumber,
             image: result.image,
@@ -386,19 +428,19 @@ export const generateCompleteDrawingTutorial = async (
             attempts: result.attempts
         });
         
-        // Callback opzionale
+        // Optional callback for progress tracking
         if (onStepComplete) {
             onStepComplete(currentInstructions.stepNumber, result.image, result.finalScore);
         }
         
-        // Aggiorna canvas per il prossimo step
+        // Update canvas for the next step
         previousCanvas = result.image;
         
-        // Ottieni istruzioni per il prossimo step (se esiste)
+        // Get instructions for the next step if available
         if (result.validation.instructionsForNextStep) {
             currentInstructions = result.validation.instructionsForNextStep;
         } else if (i < totalSteps - 1) {
-            // Fallback: genera nuove istruzioni se mancano
+            // Fallback: generate new instructions if missing
             console.warn('Missing next step instructions, generating new ones...');
             currentInstructions = {
                 stepNumber: i + 2,
