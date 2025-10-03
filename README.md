@@ -44,16 +44,6 @@ The system implements a sophisticated workflow that simulates a drawing expert:
    - Provides feedback for improvements
    - Decides whether to proceed or regenerate
 
-## 🎮 Application States
-
-The app manages 5 main states through a state machine:
-
-- **IDLE**: Initial upload screen
-- **LOADING**: AI is generating a new step
-- **AWAITING_USER_INPUT**: User needs to decide on a proposed step
-- **RESULTS**: Tutorial completed, shows final gallery
-- **ERROR**: Error handling with retry option
-
 ## 📱 User Interface
 
 ### 1. Generation in Progress
@@ -101,7 +91,7 @@ Final result of the tutorial:
 
 Watch the complete video showing the entire application flow:
 
-[![Demo Video](DemoResources/demo_video_draw_easy.mp4)](DemoResources/demo_video_draw_easy.mp4)
+https://github.com/user-attachments/assets/71d2b946-1d94-492f-a915-df7a4a782db5
 
 ## 🚀 Installation and Setup
 
