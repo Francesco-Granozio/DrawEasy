@@ -1,0 +1,5 @@
+{
+  "name": "Draw Step by Step AI",
+  "description": "Upload a drawing and this AI-powered application will generate a step-by-step visual guide on how to recreate it, perfect for aspiring artists.",
+  "requestFramePermissions": []
+}
